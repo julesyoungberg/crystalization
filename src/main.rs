@@ -179,7 +179,7 @@ impl Walkers {
         }
 
         self.walkers = vec![];
-        for _ in 0..self.walkers.len() {
+        for _ in 0..children.len() {
             let mut new_walkers: Vec<Walker> = rx
                 .recv()
                 .unwrap()
@@ -206,7 +206,7 @@ fn map(i: f32, in_min: f32, in_max: f32, out_min: f32, out_max: f32) -> f32 {
     return (i - in_min) / (in_max - in_min) * (out_max - out_min) + out_min;
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct Walker {
     pub position: Vec2,
     pub prev_position: Vec2,
