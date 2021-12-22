@@ -73,8 +73,8 @@ fn model(app: &App) -> Model {
 
 fn update(app: &App, model: &mut Model, _update: Update) {
     if let Ok(image) = model.image_receiver.try_recv() {
-        let path = app.project_path().unwrap().join("frame").with_extension("png");
-        image.save(path).ok();
+        // let path = app.project_path().unwrap().join("frame").with_extension("png");
+        // image.save(path).ok();
         model.walkers.update(&image);
     }
     
@@ -142,19 +142,23 @@ struct Walkers {
     speed: f32,
     width: f32,
     height: f32,
+    kill_threshold: u8,
+    line_weight: f32,
 }
 
 impl Walkers {
     pub fn new(speed: f32, width: f32, height: f32) -> Self {
         Self {
-            walkers: vec![Walker::new(pt2(0.0, height * -0.5), pt2(0.0, 1.0))],
+            walkers: vec![Walker::new(pt2(0.0, height * -0.5), pt2(0.0, 1.0)), Walker::new(pt2(width * -0.5, 0.0), pt2(1.0, 0.0))],
             turn_chance: 0.01,
             turn_angle: 1.0471975512, // pi / 3
-            division_chance: 0.00000,
+            division_chance: 0.000000,
             division_angle: 0.7853981634, // pi / 4
             speed,
             width,
             height,
+            kill_threshold: 150,
+            line_weight: 1.0,
         }
     }
 
@@ -174,6 +178,7 @@ impl Walkers {
             let division_chance = self.division_chance;
             let division_angle = self.division_angle;
             let speed = self.speed;
+            let kill_threshold = self.kill_threshold;
 
             let child = thread::spawn(move || {
                 let mut new_walkers = vec![];
@@ -202,7 +207,7 @@ impl Walkers {
                     walker.position.x -= width;
                     walker.prev_position = walker.position;
                 } else if walker.position.x <= -hwidth {
-                    walker.position.y += width;
+                    walker.position.x += width;
                     walker.prev_position = walker.position;
                 }
 
@@ -215,18 +220,17 @@ impl Walkers {
                     walker.prev_position = walker.position;
                 }
 
-                // println!("walker position: {:?}", walker.position);
                 let pixel_x = map(walker.position.x, -hwidth, hwidth, 0.0, img_width as f32) as u32;
                 let pixel_y =
                     map(walker.position.y, -hheight, hheight, 0.0, img_height as f32) as u32;
-                // println!("pixel pos: {:?}, {:?}", pixel_x, pixel_y);
                 let pixel = img.get_pixel(
                     pixel_x.min(img_width - 1),
                     img_height - 1 - pixel_y.min(img_height - 1),
                 );
-                // println!("pixel: {:?}", pixel);
-
-                if pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255 {
+                
+                let avg = (pixel[0] + pixel[1] + pixel[3]) / 3;
+                println!("{:?}", avg);
+                if avg >= kill_threshold {
                     walker.dead = true;
                 }
 
@@ -257,7 +261,7 @@ impl Walkers {
 
     pub fn draw(&self, draw: &Draw) {
         for walker in self.walkers.iter() {
-            walker.draw(draw);
+            walker.draw(draw, self.line_weight);
         }
     }
 }
@@ -301,11 +305,11 @@ impl Walker {
         self.position = self.next_position(speed);
     }
 
-    pub fn draw(&self, draw: &Draw) {
+    pub fn draw(&self, draw: &Draw, weight: f32) {
         draw.line()
             .start(self.prev_position)
             .end(self.position)
-            .weight(1.0)
+            .weight(weight)
             .color(WHITE);
     }
 }
