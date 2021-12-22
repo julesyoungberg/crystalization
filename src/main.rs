@@ -1,3 +1,4 @@
+use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc::channel;
 use std::thread;
 
@@ -18,65 +19,118 @@ fn main() {
 struct Model {
     walkers: Walkers,
     first_run: bool,
+    main_window_id: WindowId,
+    texture: wgpu::Texture,
+    texture_capturer: wgpu::TextureCapturer,
+    texture_reshaper: wgpu::TextureReshaper,
+    renderer: nannou::draw::Renderer,
+    image_sender: Sender<nannou::image::RgbaImage>,
+    image_receiver: Receiver<nannou::image::RgbaImage>,
+    draw: nannou::Draw,
 }
 
-fn model(_app: &App) -> Model {
+fn model(app: &App) -> Model {
+    let main_window_id = app.new_window().size(WIDTH, HEIGHT).view(view).build().unwrap();
+    let window = app.window(main_window_id).unwrap();
+    let device = window.device();
+    let msaa_samples = window.msaa_samples();
+
+    let size = pt2((WIDTH) as f32, (HEIGHT) as f32);
+    let texture = create_app_texture(device, size, msaa_samples);
+    let texture_reshaper = create_texture_reshaper(device, &texture, msaa_samples);
+
+    // Create our `Draw` instance and a renderer for it.
+    let draw = nannou::Draw::new();
+    let descriptor = texture.descriptor();
+    let renderer =
+        nannou::draw::RendererBuilder::new().build_from_texture_descriptor(device, descriptor);
+
+    // Create the texture capturer.
+    let texture_capturer = wgpu::TextureCapturer::default();
+
+    let desc = wgpu::CommandEncoderDescriptor {
+        label: Some("nannou_isf_pipeline_new"),
+    };
+    let encoder = device.create_command_encoder(&desc);
+
+    window.queue().submit([encoder.finish()]);
+
+    let (image_sender, image_receiver) = channel();
+
     Model {
-        walkers: Walkers::new(0.5),
+        walkers: Walkers::new(0.5, size[0], size[1]),
         first_run: true,
+        main_window_id,
+        texture,
+        texture_capturer,
+        texture_reshaper,
+        renderer,
+        image_sender,
+        image_receiver,
+        draw,
     }
 }
 
 fn update(app: &App, model: &mut Model, _update: Update) {
-    // read previous frame
-    let image = match nannou::image::io::Reader::open(captured_frame_path(app)) {
-        Ok(f) => match f.decode() {
-            Ok(i) => i,
-            Err(_) => return,
-        },
-        Err(_) => return,
-    };
+    if let Ok(image) = model.image_receiver.try_recv() {
+        let path = app.project_path().unwrap().join("frame").with_extension("png");
+        image.save(path).ok();
+        model.walkers.update(&image);
+    }
+    
+    // prepare to draw.
+    let draw = &model.draw;
+    draw.reset();
 
-    model.walkers.update(&image);
-    model.first_run = false;
+    // clear the background on the first run
+    if model.first_run {
+        draw.background().color(BLACK);
+        model.first_run = false;
+    }
+
+    model.walkers.draw(&draw);
+
+    let window = app.window(model.main_window_id).unwrap();
+    let device = window.device();
+
+    // setup encoder
+    let desc = wgpu::CommandEncoderDescriptor {
+        label: Some("render_pass"),
+    };
+    let mut encoder = device.create_command_encoder(&desc);
+
+    model
+        .renderer
+        .render_to_texture(device, &mut encoder, &draw, &model.texture);
+
+    // Take a snapshot of the texture. The capturer will do the following:
+    //
+    // 1. Resolve the texture to a non-multisampled texture if necessary.
+    // 2. Convert the format to non-linear 8-bit sRGBA ready for image storage.
+    // 3. Copy the result to a buffer ready to be mapped for reading.
+    let snapshot = model
+        .texture_capturer
+        .capture(device, &mut encoder, &model.texture);
+
+    // Submit the commands for our drawing and texture capture to the GPU.
+    window.queue().submit(Some(encoder.finish()));
+
+    let sender = model.image_sender.clone();
+
+    snapshot
+        .read(move |result| {
+            let image = result.expect("failed to map texture memory").to_owned();
+            sender.send(image).ok();
+        })
+        .unwrap();
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {
-    // Prepare to draw.
-    let draw = app.draw();
-
-    // Clear the background.
-    if model.first_run {
-        draw.background().color(BLACK);
-    }
-
-    // draw state
-    model.walkers.draw(&draw);
-
-    // Write to the window frame.
-    draw.to_frame(app, &frame).unwrap();
-
-    // Capture the frame!
-    let file_path = captured_frame_path(app);
-    let window = app.main_window();
-    window.capture_frame(file_path);
-
-    // let frame_capture = window
-    //     .frame_data
-    //     .as_ref()
-    //     .expect("window capture requires that `view` draws to a `Frame` (not a `RawFrame`)")
-    //     .capture;
-    // println!("frame_capture: {:?}", frame_capture)
-}
-
-fn captured_frame_path(app: &App) -> std::path::PathBuf {
-    // Create a path that we want to save this frame to.
-    app.project_path()
-        .expect("failed to locate `project_path`")
-        // Name each file after the number of the frame.
-        .join("frame")
-        // The extension will be PNG. We also support tiff, bmp, gif, jpeg, webp and some others.
-        .with_extension("png")
+    // Sample the texture and write it to the frame.
+    let mut encoder = frame.command_encoder();
+    model
+        .texture_reshaper
+        .encode_render_pass(frame.texture_view(), &mut *encoder);
 }
 
 struct Walkers {
@@ -86,21 +140,25 @@ struct Walkers {
     division_chance: f32,
     division_angle: f32,
     speed: f32,
+    width: f32,
+    height: f32,
 }
 
 impl Walkers {
-    pub fn new(speed: f32) -> Self {
+    pub fn new(speed: f32, width: f32, height: f32) -> Self {
         Self {
-            walkers: vec![Walker::new(pt2(0.0, HEIGHT as f32 * -0.5), pt2(0.0, 1.0))],
+            walkers: vec![Walker::new(pt2(0.0, height * -0.5), pt2(0.0, 1.0))],
             turn_chance: 0.01,
             turn_angle: 1.0471975512, // pi / 3
-            division_chance: 0.00001,
+            division_chance: 0.00000,
             division_angle: 0.7853981634, // pi / 4
             speed,
+            width,
+            height,
         }
     }
 
-    pub fn update(&mut self, prev_frame: &nannou::image::DynamicImage) {
+    pub fn update(&mut self, prev_frame: &nannou::image::RgbaImage) {
         let (tx, rx) = channel();
         let mut children = vec![];
 
@@ -108,9 +166,9 @@ impl Walkers {
             let mut walker = w.clone();
             // turn walkers
             let thread_tx = tx.clone();
-            let img = prev_frame.to_rgba8();
-            let hwidth = WIDTH as f32 / 2.0;
-            let hheight = HEIGHT as f32 / 2.0;
+            let img = prev_frame.clone();
+            let width = self.width;
+            let height = self.height;
             let turn_chance = self.turn_chance;
             let turn_angle = self.turn_angle;
             let division_chance = self.division_chance;
@@ -139,19 +197,21 @@ impl Walkers {
                 walker.update(speed);
 
                 // wrap around canvas
+                let hwidth = width / 2.0;
                 if walker.position.x >= hwidth {
-                    walker.position.x -= WIDTH as f32;
+                    walker.position.x -= width;
                     walker.prev_position = walker.position;
                 } else if walker.position.x <= -hwidth {
-                    walker.position.y += WIDTH as f32;
+                    walker.position.y += width;
                     walker.prev_position = walker.position;
                 }
 
+                let hheight = height / 2.0;
                 if walker.position.y >= hheight {
-                    walker.position.y -= HEIGHT as f32;
+                    walker.position.y -= height;
                     walker.prev_position = walker.position;
                 } else if walker.position.y <= -hheight {
-                    walker.position.y += HEIGHT as f32;
+                    walker.position.y += height;
                     walker.prev_position = walker.position;
                 }
 
@@ -248,4 +308,35 @@ impl Walker {
             .weight(1.0)
             .color(WHITE);
     }
+}
+
+fn create_app_texture(device: &wgpu::Device, size: Point2, msaa_samples: u32) -> wgpu::Texture {
+    wgpu::TextureBuilder::new()
+        .size([size[0] as u32, size[1] as u32])
+        .usage(
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+        )
+        .sample_count(msaa_samples)
+        .format(Frame::TEXTURE_FORMAT)
+        .build(device)
+}
+
+fn create_texture_reshaper(
+    device: &wgpu::Device,
+    texture: &wgpu::Texture,
+    msaa_samples: u32,
+) -> wgpu::TextureReshaper {
+    let texture_view = texture.view().build();
+    let texture_component_type = texture.sample_type();
+    let dst_format = Frame::TEXTURE_FORMAT;
+    wgpu::TextureReshaper::new(
+        device,
+        &texture_view,
+        msaa_samples,
+        texture_component_type,
+        msaa_samples,
+        dst_format,
+    )
 }
