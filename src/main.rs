@@ -149,15 +149,15 @@ struct Walkers {
 impl Walkers {
     pub fn new(speed: f32, width: f32, height: f32) -> Self {
         Self {
-            walkers: vec![Walker::new(pt2(0.0, height * -0.5), pt2(0.0, 1.0)), Walker::new(pt2(width * -0.5, 0.0), pt2(1.0, 0.0))],
+            walkers: vec![Walker::new(pt2(0.0, height * -0.5), pt2(0.0, 1.0))],
             turn_chance: 0.01,
             turn_angle: 1.0471975512, // pi / 3
-            division_chance: 0.000000,
+            division_chance: 0.0000001,
             division_angle: 0.7853981634, // pi / 4
             speed,
             width,
             height,
-            kill_threshold: 150,
+            kill_threshold: 10,
             line_weight: 1.0,
         }
     }
@@ -228,8 +228,11 @@ impl Walkers {
                     img_height - 1 - pixel_y.min(img_height - 1),
                 );
                 
-                let avg = (pixel[0] + pixel[1] + pixel[3]) / 3;
-                println!("{:?}", avg);
+                let avg = (pixel[0] + pixel[1] + pixel[2]) / 3;
+                // if avg > 0 {
+                //     println!("{:?}", avg);
+                // }
+
                 if avg >= kill_threshold {
                     walker.dead = true;
                 }
