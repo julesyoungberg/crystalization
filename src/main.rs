@@ -5,8 +5,8 @@ use std::thread;
 use nannou::prelude::*;
 use rand::Rng;
 
-const WIDTH: u32 = 889;
-const HEIGHT: u32 = 500;
+const WIDTH: u32 = 1066;
+const HEIGHT: u32 = 600;
 
 fn main() {
     nannou::app(model)
@@ -57,6 +57,9 @@ fn model(app: &App) -> Model {
 
     let (image_sender, image_receiver) = channel();
 
+    // Make sure the directory where we will save images to exists.
+    std::fs::create_dir_all(&capture_directory(app)).unwrap();
+
     Model {
         walkers: Walkers::new(0.5, size[0], size[1]),
         first_run: true,
@@ -71,10 +74,15 @@ fn model(app: &App) -> Model {
     }
 }
 
+fn save_frame(app: &App, image: &nannou::image::RgbaImage) {
+    let elapsed_frames = app.main_window().elapsed_frames();
+    let path = app.project_path().unwrap().join("frames").join(elapsed_frames.to_string()).with_extension("png");
+    image.save(path).ok();
+}
+
 fn update(app: &App, model: &mut Model, _update: Update) {
     if let Ok(image) = model.image_receiver.try_recv() {
-        // let path = app.project_path().unwrap().join("frame").with_extension("png");
-        // image.save(path).ok();
+        save_frame(app, &image);
         model.walkers.update(&image);
     }
     
@@ -125,7 +133,7 @@ fn update(app: &App, model: &mut Model, _update: Update) {
         .unwrap();
 }
 
-fn view(app: &App, model: &Model, frame: Frame) {
+fn view(_app: &App, model: &Model, frame: Frame) {
     // Sample the texture and write it to the frame.
     let mut encoder = frame.command_encoder();
     model
@@ -149,10 +157,13 @@ struct Walkers {
 impl Walkers {
     pub fn new(speed: f32, width: f32, height: f32) -> Self {
         Self {
-            walkers: vec![Walker::new(pt2(0.0, height * -0.5), pt2(0.0, 1.0))],
+            walkers: vec![
+                Walker::new(pt2(0.0, height * -0.5), pt2(0.0, 1.0).normalize()),
+                Walker::new(pt2(0.0, height * 0.49), pt2(0.0, -1.0).normalize())
+            ],
             turn_chance: 0.01,
             turn_angle: 1.0471975512, // pi / 3
-            division_chance: 0.0000001,
+            division_chance: 0.01,
             division_angle: 0.7853981634, // pi / 4
             speed,
             width,
@@ -346,4 +357,11 @@ fn create_texture_reshaper(
         msaa_samples,
         dst_format,
     )
+}
+
+// The directory where we'll save the frames.
+fn capture_directory(app: &App) -> std::path::PathBuf {
+    app.project_path()
+        .expect("could not locate project_path")
+        .join("frames")
 }
