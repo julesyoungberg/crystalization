@@ -7,6 +7,7 @@ use rand::Rng;
 
 const WIDTH: u32 = 1066;
 const HEIGHT: u32 = 600;
+const SAVE_FRAMES: bool = false;
 
 fn main() {
     nannou::app(model)
@@ -82,7 +83,10 @@ fn save_frame(app: &App, image: &nannou::image::RgbaImage) {
 
 fn update(app: &App, model: &mut Model, _update: Update) {
     if let Ok(image) = model.image_receiver.try_recv() {
-        save_frame(app, &image);
+        if SAVE_FRAMES {
+            save_frame(app, &image);
+        }
+
         model.walkers.update(&image);
     }
     
