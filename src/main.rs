@@ -7,7 +7,7 @@ use rand::Rng;
 
 const WIDTH: u32 = 1066;
 const HEIGHT: u32 = 600;
-const SAVE_FRAMES: bool = false;
+const SAVE_FRAMES: bool = true;
 
 fn main() {
     nannou::app(model)
@@ -156,24 +156,30 @@ struct Walkers {
     height: f32,
     kill_threshold: u8,
     line_weight: f32,
+    discrete_angles: u8,
 }
 
 impl Walkers {
     pub fn new(speed: f32, width: f32, height: f32) -> Self {
         Self {
             walkers: vec![
-                Walker::new(pt2(0.0, height * -0.5), pt2(0.0, 1.0).normalize()),
-                Walker::new(pt2(0.0, height * 0.49), pt2(0.0, -1.0).normalize())
+                Walker::new(pt2(width * -0.49, height * -0.49), pt2(1.0, 1.0).normalize()),
+                Walker::new(pt2(width * 0.49, height * -0.49), pt2(-1.0, 1.0).normalize()),
+                Walker::new(pt2(width * 0.49, height * 0.49), pt2(-1.0, -1.0).normalize()),
+                Walker::new(pt2(width * -0.49, height * 0.49), pt2(1.0, -1.0).normalize()),
+                Walker::new(pt2(-2.0, 0.0), pt2(-1.0, 0.0).normalize()),
+                Walker::new(pt2(2.0, 0.0), pt2(1.0, 0.0).normalize()),
             ],
             turn_chance: 0.01,
             turn_angle: 1.0471975512, // pi / 3
-            division_chance: 0.01,
-            division_angle: 0.7853981634, // pi / 4
+            division_chance: 0.011,
+            division_angle: 1.0471975512, // pi / 3
             speed,
             width,
             height,
             kill_threshold: 10,
             line_weight: 1.0,
+            discrete_angles: 4,
         }
     }
 
@@ -194,6 +200,7 @@ impl Walkers {
             let division_angle = self.division_angle;
             let speed = self.speed;
             let kill_threshold = self.kill_threshold;
+            let discrete_angles = self.discrete_angles;
 
             let child = thread::spawn(move || {
                 let mut new_walkers = vec![];
@@ -202,14 +209,14 @@ impl Walkers {
 
                 let turn_value = rand::thread_rng().gen_range(0..100) as f32 / 100.0;
                 if turn_value < turn_chance {
-                    walker.turn(turn_angle);
+                    walker.turn(turn_angle, discrete_angles);
                 }
 
                 // divide walkers
                 let div_value = rand::thread_rng().gen_range(0..100) as f32 / 100.0;
                 if div_value < division_chance {
                     let mut child = walker.clone();
-                    child.turn(division_angle);
+                    child.turn(division_angle, discrete_angles);
                     new_walkers.push(child);
                 }
 
@@ -306,8 +313,8 @@ impl Walker {
         }
     }
 
-    pub fn turn(&mut self, angle: f32) {
-        let factor = rand::thread_rng().gen_range(0..100) as f32 / 100.0 * 2.0 - 1.0;
+    pub fn turn(&mut self, angle: f32, discrete_angles: u8) {
+        let factor = rand::thread_rng().gen_range(0..discrete_angles) as f32 / discrete_angles as f32 * 2.0 - 1.0;
         self.velocity = self.velocity.rotate(angle * factor);
     }
 
