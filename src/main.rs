@@ -179,7 +179,7 @@ impl Walkers {
             height,
             kill_threshold: 10,
             line_weight: 1.0,
-            discrete_angles: 4,
+            discrete_angles: 2,
         }
     }
 
